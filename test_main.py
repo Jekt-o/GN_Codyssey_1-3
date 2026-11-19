@@ -31,6 +31,32 @@ class MiniNPUTests(unittest.TestCase):
         self.assertAlmostEqual(main.mac([[0.1, 0.2], [0.3, -0.4]],
                                         [[1, 2], [3, 4]]), -0.2)
 
+    def test_flat_mac_matches_matrix_mac(self):
+        for size in (3, 5, 13, 25):
+            with self.subTest(size=size):
+                patterns = main.generate_patterns(size)
+                pattern = patterns["Cross"]
+                kernel = patterns["X"]
+                flat_pattern = [value for row in pattern for value in row]
+                flat_kernel = [value for row in kernel for value in row]
+                self.assertEqual(main.mac_flat(flat_pattern, flat_kernel), main.mac(pattern, kernel))
+        self.assertAlmostEqual(main.mac_flat([0.1, 0.2, 0.3, -0.4], [1, 2, 3, 4]), -0.2)
+
+    def test_generate_patterns_accepts_even_size(self):
+        patterns = main.generate_patterns(4)
+        self.assertEqual(patterns["Cross"], [
+            [0, 1, 1, 0],
+            [1, 1, 1, 1],
+            [1, 1, 1, 1],
+            [0, 1, 1, 0],
+        ])
+        self.assertEqual(patterns["X"], [
+            [1, 0, 0, 1],
+            [0, 1, 1, 0],
+            [0, 1, 1, 0],
+            [1, 0, 0, 1],
+        ])
+
     def test_label_normalization_and_unknown_labels(self):
         for source, expected in (("+", "Cross"), ("cross", "Cross"),
                                  ("Cross", "Cross"), ("x", "X"), ("X", "X")):
@@ -147,16 +173,41 @@ class MiniNPUTests(unittest.TestCase):
             self.assertRegex(result.stdout, label + r"\s*:\s*" + str(count))
 
     def test_cli_retries_bad_row_and_handles_end_of_input(self):
-        rows = ["not a number", "0 1", "0 1 0", "1 1 1", "0 1 0",
-                "1 0 1", "0 1 0", "1 0 1", "1 0 1", "0 1 0", "1 0 1"]
+        rows = ["not a number", "0 1", "0 1 0", "1 1 1", "0 1 0", ".",
+                "1 0 1", "0 1 0", "1 0 1", ".", "1 0 1", "0 1 0", "1 0 1", "."]
         result = self.run_cli(["--mode", "1", "--repeats", "10"],
                                "\n".join(rows) + "\n")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertRegex(result.stdout, r"판정\s*:\s*B")
         self.assertIn("오류", result.stdout)
         incomplete = self.run_cli(["--mode", "1", "--repeats", "10"], "0 1 0\n")
+        self.assertEqual(incomplete.returncode, 2)
         self.assertNotIn("Traceback", incomplete.stderr)
         self.assertNotIn("Traceback", incomplete.stdout)
+
+    def test_cli_retries_too_few_and_too_many_rows(self):
+        rows = ["0 1 0", "1 1 1", ".",
+                "0 1 0", "1 1 1", "0 1 0", "9 9 9", ".",
+                "0 1 0", "1 1 1", "0 1 0", ".",
+                "1 0 1", "0 1 0", "1 0 1", ".",
+                "1 0 1", "0 1 0", "1 0 1", "."]
+        result = self.run_cli(["--mode", "1", "--repeats", "10"], "\n".join(rows) + "\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("행 수는 3개여야 합니다 (입력: 2개)", result.stdout)
+        self.assertIn("행 수는 3개여야 합니다 (입력: 4개)", result.stdout)
+        self.assertRegex(result.stdout, r"A 점수: 1\n")
+        self.assertRegex(result.stdout, r"B 점수: 5\n")
+        self.assertRegex(result.stdout, r"판정\s*:\s*B")
+
+    def test_cli_generates_manual_inputs_and_compares_mac_layouts(self):
+        result = self.run_cli(["--repeats", "10"], "1\ncross\nx\nx\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"A 점수: 1\n")
+        self.assertRegex(result.stdout, r"B 점수: 5\n")
+        self.assertRegex(result.stdout, r"판정\s*:\s*B")
+        self.assertIn("2D 평균(ms)", result.stdout)
+        self.assertIn("1D 평균(ms)", result.stdout)
+        self.assertIn("MAC 횟수(N²)", result.stdout)
 
     def test_cli_rejects_fewer_than_ten_repetitions(self):
         result = self.run_cli(["--mode", "2", "--repeats", "9"])

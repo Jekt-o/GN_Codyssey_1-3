@@ -71,11 +71,11 @@ def decide(score_a: float, score_b: float, label_a: str = "Cross", label_b: str 
 
 
 def generate_patterns(size: int) -> Dict[str, Matrix]:
-    """양의 홀수 N에 대해 중앙 십자가와 두 대각선 X를 생성한다."""
-    if isinstance(size, bool) or not isinstance(size, int) or size < 1 or size % 2 == 0:
-        raise ValueError("패턴 생성 크기는 양의 홀수여야 합니다.")
-    middle = size // 2
-    cross = [[float(row == middle or column == middle) for column in range(size)]
+    """중앙 행·열의 십자가와 두 대각선의 X를 생성한다."""
+    if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+        raise ValueError("패턴 생성 크기는 양의 정수여야 합니다.")
+    center = {(size - 1) // 2, size // 2}
+    cross = [[float(row in center or column in center) for column in range(size)]
              for row in range(size)]
     diagonal = [[float(row == column or row + column == size - 1) for column in range(size)]
                 for row in range(size)]
@@ -84,9 +84,24 @@ def generate_patterns(size: int) -> Dict[str, Matrix]:
 
 def read_matrix(name: str, size: int = 3) -> Matrix:
     print("\n{} ({}줄, 각 줄에 숫자 {}개를 공백으로 구분)".format(name, size, size))
+    print("마지막 줄 다음에 .을 입력하세요. 첫 줄에 cross 또는 x를 입력하면 자동 생성합니다.")
     matrix = []
-    while len(matrix) < size:
-        text = input("  {}행: ".format(len(matrix) + 1))
+    row_count = 0
+    while True:
+        prompt = "  {}행: ".format(row_count + 1) if row_count < size else "  입력 끝 (.): "
+        text = input(prompt).strip()
+        if text == ".":
+            if row_count == size:
+                return matrix
+            print("입력 형식 오류: 행 수는 {}개여야 합니다 (입력: {}개). 처음부터 다시 입력하세요.".format(
+                size, row_count))
+            matrix.clear()
+            row_count = 0
+            continue
+        if row_count == 0 and text.lower() in ("cross", "x"):
+            label = normalize_label(text)
+            print("{}: {} 패턴을 생성했습니다.".format(name, label))
+            return generate_patterns(size)[label]
         try:
             parts = text.split()
             if len(parts) != size:
@@ -97,37 +112,68 @@ def read_matrix(name: str, size: int = 3) -> Matrix:
         except (ValueError, OverflowError):
             print("입력 형식 오류: 각 줄에 {}개의 유한한 숫자를 공백으로 구분해 입력하세요.".format(size))
             continue
-        matrix.append(row)
-    return matrix
+        row_count += 1
+        if row_count <= size:
+            matrix.append(row)
+        if row_count == size + 1:
+            print("행이 너무 많습니다. .을 입력한 뒤 이 행렬을 다시 입력하세요.")
 
 
-def benchmark_mac(pattern: Matrix, kernel: Matrix, repeats: int) -> float:
-    """I/O와 입력 검증을 제외하고 MAC 함수 한 번의 평균 시간(ms)을 구한다."""
+def mac_flat(pattern: List[float], kernel: List[float]) -> float:
+    """같은 크기의 1차원 배열에 대해 위치별 곱셈과 누적 덧셈을 수행한다."""
+    score = 0.0
+    for index in range(len(pattern)):
+        score += pattern[index] * kernel[index]
+    if not math.isfinite(score):
+        raise ValueError("MAC 점수가 유한하지 않습니다. 입력값의 크기를 줄이세요.")
+    return score
+
+
+def benchmark_mac(pattern: Matrix, kernel: Matrix, repeats: int) -> Tuple[float, float]:
+    """동일한 입력에 대한 2차원과 1차원 MAC의 평균 시간(ms)을 구한다."""
     if repeats < 10:
         raise ValueError("성능 측정은 최소 10회 반복해야 합니다.")
-    mac(pattern, kernel)  # 워밍업: 평균에서 제외한다.
-    elapsed = 0.0
-    for _ in range(repeats):
-        start = perf_counter()
-        mac(pattern, kernel)
-        elapsed += perf_counter() - start
-    return elapsed * 1000 / repeats
+    flat_pattern = [value for row in pattern for value in row]
+    flat_kernel = [value for row in kernel for value in row]
+    mac(pattern, kernel)
+    mac_flat(flat_pattern, flat_kernel)
+    elapsed_2d = elapsed_1d = 0.0
+    for index in range(repeats):
+        if index % 2 == 0:
+            start = perf_counter()
+            mac(pattern, kernel)
+            middle = perf_counter()
+            mac_flat(flat_pattern, flat_kernel)
+            end = perf_counter()
+            elapsed_2d += middle - start
+            elapsed_1d += end - middle
+        else:
+            start = perf_counter()
+            mac_flat(flat_pattern, flat_kernel)
+            middle = perf_counter()
+            mac(pattern, kernel)
+            end = perf_counter()
+            elapsed_1d += middle - start
+            elapsed_2d += end - middle
+    return elapsed_2d * 1000 / repeats, elapsed_1d * 1000 / repeats
 
 
 def print_performance(sizes: List[int], repeats: int,
                       manual_pair: Optional[Tuple[Matrix, Matrix]] = None) -> None:
     print("\n[성능 분석: MAC 호출당 평균 / {}회]".format(repeats))
-    print("크기(N×N)     평균 시간(ms)     MAC 횟수(N²)")
-    print("----------------------------------------------")
+    print("크기(N×N)     2D 평균(ms)     1D 평균(ms)     MAC 횟수(N²)")
+    print("-----------------------------------------------------------")
     for size in sizes:
         if manual_pair is not None:
             pattern, kernel = manual_pair
         else:
             generated = generate_patterns(size)
             pattern, kernel = generated["Cross"], generated["Cross"]
-        average = benchmark_mac(pattern, kernel, repeats)
-        print("{:<12} {:>13.6f} {:>16}".format("{}×{}".format(size, size), average, size * size))
+        average_2d, average_1d = benchmark_mac(pattern, kernel, repeats)
+        print("{:<12} {:>11.6f} {:>15.6f} {:>15}".format(
+            "{}×{}".format(size, size), average_2d, average_1d, size * size))
     print("필터 1개 기준: N²번 곱셈·누적 덧셈. 두 필터 판정에는 2N²번이 필요합니다.")
+    print("동일 입력과 반복 횟수로 측정했습니다. 1차원 변환 시간은 제외했습니다.")
     if manual_pair is None:
         print("측정 입력: 크기별로 생성한 Cross 패턴과 필터 (생성 시간 제외).")
     else:
@@ -310,14 +356,24 @@ def repeat_count(value: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="반복문 기반 Mini NPU 시뮬레이터")
-    parser.add_argument("--mode", choices=("1", "2"), help="1: 사용자 입력, 2: JSON 분석 (생략하면 메뉴)")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--mode", choices=("1", "2"), help="1: 사용자 입력, 2: JSON 분석 (생략하면 메뉴)")
+    action.add_argument("--generate", type=int, metavar="N", help="N×N 십자가와 X 패턴 출력")
     parser.add_argument("--data", type=Path, default=Path(__file__).resolve().with_name("data.json"),
                         help="JSON 파일 경로 (기본: main.py와 같은 폴더의 data.json)")
     parser.add_argument("--repeats", type=repeat_count, default=DEFAULT_REPEATS,
                         help="성능 측정 반복 횟수 (기본: 1000, 최소: 10)")
     arguments = parser.parse_args()
+    if arguments.generate is not None and arguments.generate < 1:
+        parser.error("패턴 생성 크기는 양의 정수여야 합니다.")
     print("=== Mini NPU Simulator ===")
     try:
+        if arguments.generate is not None:
+            for label, matrix in generate_patterns(arguments.generate).items():
+                print("\n[{}]".format(label))
+                for row in matrix:
+                    print(" ".join(format(value, "g") for value in row))
+            return 0
         mode = arguments.mode
         while mode not in ("1", "2"):
             print("\n[모드 선택]\n1. 사용자 입력 (3×3)\n2. data.json 분석")
