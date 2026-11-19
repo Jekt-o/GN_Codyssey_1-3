@@ -185,19 +185,32 @@ class MiniNPUTests(unittest.TestCase):
         self.assertNotIn("Traceback", incomplete.stderr)
         self.assertNotIn("Traceback", incomplete.stdout)
 
-    def test_cli_retries_too_few_and_too_many_rows(self):
+    def test_cli_retries_incomplete_matrix(self):
         rows = ["0 1 0", "1 1 1", ".",
-                "0 1 0", "1 1 1", "0 1 0", "9 9 9", ".",
-                "0 1 0", "1 1 1", "0 1 0", ".",
-                "1 0 1", "0 1 0", "1 0 1", ".",
-                "1 0 1", "0 1 0", "1 0 1", "."]
+                "0 1 0", "1 1 1", "0 1 0",
+                "9 9 9", ".",
+                "1 0 1", "0 1 0", "1 0 1",
+                "1 0 1", "0 1 0", "1 0 1"]
         result = self.run_cli(["--mode", "1", "--repeats", "10"], "\n".join(rows) + "\n")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("행 수는 3개여야 합니다 (입력: 2개)", result.stdout)
-        self.assertIn("행 수는 3개여야 합니다 (입력: 4개)", result.stdout)
+        self.assertIn("행 수는 3개여야 합니다 (입력: 1개)", result.stdout)
         self.assertRegex(result.stdout, r"A 점수: 1\n")
         self.assertRegex(result.stdout, r"B 점수: 5\n")
         self.assertRegex(result.stdout, r"판정\s*:\s*B")
+
+    def test_cli_accepts_assignment_example_without_separators(self):
+        rows = ["1", "0 1 0", "1 1 1", "0 1 0",
+                "1 0 1", "0 1 0", "1 0 1",
+                "1 0 1", "0 1 0", "1 0 1"]
+        result = self.run_cli(["--repeats", "10"], "\n".join(rows) + "\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("입력 형식 오류", result.stdout)
+        self.assertRegex(result.stdout, r"A 점수: 1\n")
+        self.assertRegex(result.stdout, r"B 점수: 5\n")
+        self.assertRegex(result.stdout, r"판정\s*:\s*B")
+        self.assertRegex(result.stdout, r"두 필터 MAC 연산 시간.* ms")
+        self.assertIn("MAC 호출당 평균 / 10회", result.stdout)
 
     def test_cli_generates_manual_inputs_and_compares_mac_layouts(self):
         result = self.run_cli(["--repeats", "10"], "1\ncross\nx\nx\n")

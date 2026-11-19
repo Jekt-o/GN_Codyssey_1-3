@@ -82,23 +82,23 @@ def generate_patterns(size: int) -> Dict[str, Matrix]:
     return {"Cross": cross, "X": diagonal}
 
 
-def read_matrix(name: str, size: int = 3) -> Matrix:
+def read_matrix(name: str, size: int = 3, *, allow_separator: bool = False) -> Matrix:
     print("\n{} ({}줄, 각 줄에 숫자 {}개를 공백으로 구분)".format(name, size, size))
-    print("마지막 줄 다음에 .을 입력하세요. 첫 줄에 cross 또는 x를 입력하면 자동 생성합니다.")
+    print("입력 도중 .을 입력하면 처음부터 다시 입력합니다. 첫 줄에 cross 또는 x를 입력하면 자동 생성합니다.")
     matrix = []
-    row_count = 0
-    while True:
-        prompt = "  {}행: ".format(row_count + 1) if row_count < size else "  입력 끝 (.): "
-        text = input(prompt).strip()
+    while len(matrix) < size:
+        text = input("  {}행: ".format(len(matrix) + 1)).strip()
+        if allow_separator:
+            # 이전 입력 형식의 행렬 사이 구분자를 한 번 건너뛴다.
+            allow_separator = False
+            if text == ".":
+                continue
         if text == ".":
-            if row_count == size:
-                return matrix
             print("입력 형식 오류: 행 수는 {}개여야 합니다 (입력: {}개). 처음부터 다시 입력하세요.".format(
-                size, row_count))
+                size, len(matrix)))
             matrix.clear()
-            row_count = 0
             continue
-        if row_count == 0 and text.lower() in ("cross", "x"):
+        if not matrix and text.lower() in ("cross", "x"):
             label = normalize_label(text)
             print("{}: {} 패턴을 생성했습니다.".format(name, label))
             return generate_patterns(size)[label]
@@ -112,11 +112,8 @@ def read_matrix(name: str, size: int = 3) -> Matrix:
         except (ValueError, OverflowError):
             print("입력 형식 오류: 각 줄에 {}개의 유한한 숫자를 공백으로 구분해 입력하세요.".format(size))
             continue
-        row_count += 1
-        if row_count <= size:
-            matrix.append(row)
-        if row_count == size + 1:
-            print("행이 너무 많습니다. .을 입력한 뒤 이 행렬을 다시 입력하세요.")
+        matrix.append(row)
+    return matrix
 
 
 def mac_flat(pattern: List[float], kernel: List[float]) -> float:
@@ -183,10 +180,10 @@ def print_performance(sizes: List[int], repeats: int,
 def run_manual(repeats: int) -> int:
     filter_a = read_matrix("필터 A")
     print("필터 A 저장 완료")
-    filter_b = read_matrix("필터 B")
+    filter_b = read_matrix("필터 B", allow_separator=True)
     print("필터 B 저장 완료")
     while True:
-        pattern = read_matrix("패턴")
+        pattern = read_matrix("패턴", allow_separator=True)
         try:
             start = perf_counter()
             score_a = mac(pattern, filter_a)
