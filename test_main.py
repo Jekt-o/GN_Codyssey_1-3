@@ -5,7 +5,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 import main
 
@@ -211,6 +214,25 @@ class MiniNPUTests(unittest.TestCase):
         self.assertRegex(result.stdout, r"판정\s*:\s*B")
         self.assertRegex(result.stdout, r"두 필터 MAC 연산 시간.* ms")
         self.assertIn("MAC 호출당 평균 / 10회", result.stdout)
+
+    def test_terminal_retries_matrix_with_four_rows(self):
+        cross = ["0 1 0", "1 1 1", "0 1 0"]
+        diagonal = ["1 0 1", "0 1 0", "1 0 1"]
+        rows = cross + ["9 9 9"] + cross + [""] + diagonal + [""] + diagonal + [""]
+        output = StringIO()
+        with patch("sys.stdin") as stdin, patch("builtins.input", side_effect=rows), redirect_stdout(output):
+            stdin.isatty.return_value = True
+            self.assertEqual(main.run_manual(10), 0)
+        self.assertIn("행 수는 3개여야 합니다 (입력: 4개)", output.getvalue())
+        self.assertIn("A 점수: 1\nB 점수: 5\n", output.getvalue())
+
+    def test_redirected_mode_rejects_extra_manual_input(self):
+        rows = ["1", "0 1 0", "1 1 1", "0 1 0", "9 9 9",
+                "1 0 1", "0 1 0", "1 0 1", "1 0 1", "0 1 0", "1 0 1"]
+        result = self.run_cli(["--repeats", "10"], "\n".join(rows) + "\n")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("추가 입력이 있습니다.", result.stdout)
+        self.assertNotIn("[MAC 결과]", result.stdout)
 
     def test_cli_generates_manual_inputs_and_compares_mac_layouts(self):
         result = self.run_cli(["--repeats", "10"], "1\ncross\nx\nx\n")

@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -82,37 +83,44 @@ def generate_patterns(size: int) -> Dict[str, Matrix]:
     return {"Cross": cross, "X": diagonal}
 
 
-def read_matrix(name: str, size: int = 3, *, allow_separator: bool = False) -> Matrix:
+def read_matrix(name: str, size: int = 3, *, allow_separator: bool = False,
+                confirm_rows: bool = False) -> Matrix:
     print("\n{} ({}줄, 각 줄에 숫자 {}개를 공백으로 구분)".format(name, size, size))
     print("입력 도중 .을 입력하면 처음부터 다시 입력합니다. 첫 줄에 cross 또는 x를 입력하면 자동 생성합니다.")
     matrix = []
-    while len(matrix) < size:
-        text = input("  {}행: ".format(len(matrix) + 1)).strip()
+    while confirm_rows or len(matrix) < size:
+        if len(matrix) == size:
+            text = input("  저장 확인 (Enter): ").strip()
+            if text in ("", "."):
+                break
+        else:
+            text = input("  {}행: ".format(len(matrix) + 1)).strip()
         if allow_separator:
             # 이전 입력 형식의 행렬 사이 구분자를 한 번 건너뛴다.
             allow_separator = False
             if text == ".":
                 continue
-        if text == ".":
-            print("입력 형식 오류: 행 수는 {}개여야 합니다 (입력: {}개). 처음부터 다시 입력하세요.".format(
-                size, len(matrix)))
-            matrix.clear()
-            continue
-        if not matrix and text.lower() in ("cross", "x"):
-            label = normalize_label(text)
-            print("{}: {} 패턴을 생성했습니다.".format(name, label))
-            return generate_patterns(size)[label]
-        try:
-            parts = text.split()
-            if len(parts) != size:
-                raise ValueError
-            row = [float(part) for part in parts]
-            if not all(math.isfinite(number) for number in row):
-                raise ValueError
-        except (ValueError, OverflowError):
-            print("입력 형식 오류: 각 줄에 {}개의 유한한 숫자를 공백으로 구분해 입력하세요.".format(size))
-            continue
-        matrix.append(row)
+        if text != ".":
+            if not matrix and text.lower() in ("cross", "x"):
+                label = normalize_label(text)
+                print("{}: {} 패턴을 생성했습니다.".format(name, label))
+                return generate_patterns(size)[label]
+            try:
+                parts = text.split()
+                if len(parts) != size:
+                    raise ValueError
+                row = [float(part) for part in parts]
+                if not all(math.isfinite(number) for number in row):
+                    raise ValueError
+            except (ValueError, OverflowError):
+                print("입력 형식 오류: 각 줄에 {}개의 유한한 숫자를 공백으로 구분해 입력하세요.".format(size))
+                continue
+            matrix.append(row)
+            if len(matrix) <= size:
+                continue
+        print("입력 형식 오류: 행 수는 {}개여야 합니다 (입력: {}개). 처음부터 다시 입력하세요.".format(
+            size, len(matrix)))
+        matrix.clear()
     return matrix
 
 
@@ -178,12 +186,13 @@ def print_performance(sizes: List[int], repeats: int,
 
 
 def run_manual(repeats: int) -> int:
-    filter_a = read_matrix("필터 A")
+    confirm_rows = sys.stdin.isatty()
+    filter_a = read_matrix("필터 A", confirm_rows=confirm_rows)
     print("필터 A 저장 완료")
-    filter_b = read_matrix("필터 B", allow_separator=True)
+    filter_b = read_matrix("필터 B", allow_separator=not confirm_rows, confirm_rows=confirm_rows)
     print("필터 B 저장 완료")
     while True:
-        pattern = read_matrix("패턴", allow_separator=True)
+        pattern = read_matrix("패턴", allow_separator=not confirm_rows, confirm_rows=confirm_rows)
         try:
             start = perf_counter()
             score_a = mac(pattern, filter_a)
@@ -193,6 +202,10 @@ def run_manual(repeats: int) -> int:
             print("연산 오류: {} 패턴을 다시 입력하세요.".format(error))
             continue
         break
+    if not confirm_rows and any(line.strip() not in ("", ".") for line in sys.stdin):
+        print("입력 형식 오류: 필터 A, 필터 B, 패턴에 각각 3행이 필요합니다. "
+              "추가 입력이 있습니다. 다시 실행하여 입력하세요.")
+        return 2
     prediction = decide(score_a, score_b, "A", "B")
     print("\n[MAC 결과]")
     print("A 점수: {:.17g}".format(score_a))
